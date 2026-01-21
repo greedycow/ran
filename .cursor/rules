@@ -13,7 +13,8 @@ src/
 ├── allocate.py        # allocate_uniform_until_saturation() - water-filling traffic allocation
 ├── optimiser.py       # coalition_utility(), coalition_value_star() - find optimal guardians
 ├── profit.py          # shapley_values(), payoff_rule1/2/3() - gain sharing rules
-└── main.py            # simulate_one_hour(), example usage and entry point
+├── predict.py         # predict_traffic() - simple moving average prediction
+└── main.py            # simulate_one_hour_oracle(), simulate_one_hour_online(), comparison
 ```
 
 ## Implemented Features
@@ -35,8 +36,28 @@ src/
 - **payoff_rule2()**: Guard vs non-guard interpolated Shapley (φ_i and ψ_i weighted by ρ_i)
 - **payoff_rule3()**: Proportional to standalone utility v(A_i)
 
-### Simulation (main.py)
-- **simulate_one_hour()**: Run 60-step simulation, compute v*, guardians, and payoffs at each step
+### Traffic Prediction (predict.py)
+- **predict_traffic()**: Simple moving average predictor
+  - Uses last `window_size` observations (default 5)
+  - Falls back to available data if history < window_size
+
+### Simulation Modes (main.py)
+
+#### 1. Oracle Mode (`simulate_one_hour_oracle`)
+- **God's eye view**: knows exact traffic at time t when making decisions
+- Used as upper bound for performance comparison
+- Returns: v_star, guardians, payoffs for each time step
+
+#### 2. Online Mode (`simulate_one_hour_online`)
+- **Realistic scenario**: predicts traffic using history (0..t-1)
+- Makes decisions based on predicted traffic
+- Computes actual value using real traffic
+- Returns: predictions, actual traffic, prediction errors, plus standard outputs
+
+#### 3. Comparison (`compare_oracle_vs_online`)
+- **Guardian Agreement**: % of time steps with same guardian selection
+- **Value Loss**: (oracle - online) / oracle as percentage
+- **Prediction RMSE**: Root mean square error of traffic prediction
 
 ## Current Example Configuration
 
@@ -54,10 +75,10 @@ src/
 - **Op3**: Counter-cyclical (10-40), high when others low
 - **Op4**: Steady growth (10-45) throughout the hour
 
-Total traffic ranges from ~138 to ~209, triggering different guardian configurations:
-- Low traffic: [0, 2] (Op1+Op3)
-- Medium traffic: [0, 1] or [0, 3]
-- High traffic: [0, 2, 3] (three guardians needed)
+### Typical Results
+- Guardian Agreement Rate: ~75%
+- Value Loss: ~0.3%
+- Prediction RMSE: ~3.2
 
 ## Running the Simulation
 ```bash
@@ -68,5 +89,5 @@ cd src && python main.py
 - [ ] Support real traffic data injection
 - [ ] Add visualization of simulation results
 - [ ] Implement coalition stability analysis
-- [ ] Add more sophisticated traffic patterns
+- [ ] Add more sophisticated prediction methods (ARIMA, etc.)
 - [ ] Performance optimization for large N (approximate Shapley)

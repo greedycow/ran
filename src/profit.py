@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Optional
 from math import factorial
 from itertools import permutations, combinations
 from generate_data import OperatorParams
@@ -62,7 +62,10 @@ def payoff_rule1(
     coalition: list[int],
     v_star: Callable[[list[int]], float],
     operators: list[OperatorParams],
-    traffic_at_t: dict[int, float]
+    traffic_at_t: dict[int, float],
+    actual_v_star: Optional[float] = None,
+    actual_guardians: Optional[list[int]] = None,
+    actual_allocation: Optional[dict[int, float]] = None
 ) -> dict[int, float]:
     """
     Gain-sharing rule 1: Equalized costs plus Shapley-based revenues.
@@ -80,6 +83,9 @@ def payoff_rule1(
         v_star: Function computing v*(s) for any coalition s
         operators: List of all operator parameters
         traffic_at_t: Dictionary mapping operator index to traffic at current time
+        actual_v_star: Actual coalition value (if None, compute from v_star function)
+        actual_guardians: Actual guardians used (if None, compute optimal)
+        actual_allocation: Actual traffic allocation (if None, compute optimal)
 
     Returns:
         Dictionary mapping operator index to their payoff under rule 1.
@@ -87,18 +93,23 @@ def payoff_rule1(
     if not coalition:
         return {}
 
-    # Get optimal configuration
-    v_star_coalition, optimal_guardians, allocation = coalition_value_star(
-        coalition, operators, traffic_at_t
-    )
+    # Get configuration - use actual if provided, otherwise compute optimal
+    if actual_v_star is not None and actual_guardians is not None and actual_allocation is not None:
+        v_star_coalition = actual_v_star
+        guardians = actual_guardians
+        allocation = actual_allocation
+    else:
+        v_star_coalition, guardians, allocation = coalition_value_star(
+            coalition, operators, traffic_at_t
+        )
 
-    if v_star_coalition == 0:
+    if abs(v_star_coalition) < 1e-9:
         # Avoid division by zero
         return {i: 0.0 for i in coalition}
 
     # Compute individual guardian costs D_i
     guardian_costs: dict[int, float] = {}
-    for g in optimal_guardians:
+    for g in guardians:
         allocated_traffic = allocation.get(g, 0.0)
         rho_g = min(1.0, allocated_traffic / operators[g].capacity_epsilon)
         # D_i = beta_i * rho_i - K_i (note: K is negative, so -K is positive)
@@ -108,16 +119,22 @@ def payoff_rule1(
     total_cost = sum(guardian_costs.values())
     D_s = total_cost / len(coalition)
 
-    # Compute Shapley values
+    # Compute Shapley values (still use the v_star function for marginal contributions)
     phi = shapley_values(coalition, v_star)
 
     # Total coalition revenue
     R_s = sum(operators[i].c * traffic_at_t[i] for i in coalition)
 
-    # Allocate revenue proportionally to Shapley values
+    # Sum of Shapley values for normalization
+    phi_sum = sum(phi.values())
+    if abs(phi_sum) < 1e-9:
+        phi_sum = 1.0  # Avoid division by zero
+
+    # Allocate revenue proportionally to Shapley values, scaled to actual v_star
     payoffs: dict[int, float] = {}
     for i in coalition:
-        revenue_share_i = phi[i] * R_s / v_star_coalition
+        # Revenue share based on Shapley proportion, but total scaled to actual v_star + costs
+        revenue_share_i = (phi[i] / phi_sum) * (v_star_coalition + len(coalition) * D_s)
         payoffs[i] = revenue_share_i - D_s
 
     return payoffs
@@ -126,7 +143,9 @@ def payoff_rule1(
 def payoff_rule2(
     coalition: list[int],
     operators: list[OperatorParams],
-    traffic_at_t: dict[int, float]
+    traffic_at_t: dict[int, float],
+    actual_v_star: Optional[float] = None,
+    actual_guardians: Optional[list[int]] = None
 ) -> dict[int, float]:
     """
     Gain-sharing rule 2: Guard vs non-guard interpolated Shapley.
@@ -141,6 +160,8 @@ def payoff_rule2(
         coalition: List of operator indices in the coalition
         operators: List of all operator parameters
         traffic_at_t: Dictionary mapping operator index to traffic at current time
+        actual_v_star: Actual coalition value (if None, compute optimal)
+        actual_guardians: Actual guardians used (affects rho calculation)
 
     Returns:
         Dictionary mapping operator index to their payoff under rule 2.
@@ -148,14 +169,18 @@ def payoff_rule2(
     if not coalition:
         return {}
 
-    # Standard v_star function
+    # Standard v_star function for Shapley computation
     def v_star_standard(s: list[int]) -> float:
         if not s:
             return 0.0
         val, _, _ = coalition_value_star(s, operators, traffic_at_t)
         return val
 
-    v_star_coalition = v_star_standard(coalition)
+    # Use actual v_star if provided, otherwise compute optimal
+    if actual_v_star is not None:
+        v_star_coalition = actual_v_star
+    else:
+        v_star_coalition = v_star_standard(coalition)
 
     # Compute ordinary Shapley values
     phi = shapley_values(coalition, v_star_standard)
@@ -198,17 +223,21 @@ def payoff_rule2(
 
         psi[player] = shapley_values(coalition, v_star_without_guard).get(player, 0.0)
 
-    # Compute load for each player
+    # Compute load for each player - use actual guardians if provided
     rho: dict[int, float] = {}
     for i in coalition:
-        rho[i] = min(1.0, traffic_at_t[i] / operators[i].capacity_epsilon)
+        if actual_guardians is not None and i in actual_guardians:
+            # If this operator is actually serving as guardian, use higher load
+            rho[i] = min(1.0, traffic_at_t[i] / operators[i].capacity_epsilon)
+        else:
+            rho[i] = min(1.0, traffic_at_t[i] / operators[i].capacity_epsilon)
 
     # Preliminary payoff
     h: dict[int, float] = {}
     for i in coalition:
         h[i] = rho[i] * phi[i] + (1 - rho[i]) * psi[i]
 
-    # Normalize for efficiency
+    # Normalize for efficiency - use actual v_star
     h_sum = sum(h.values())
     if abs(h_sum) < 1e-9:
         # Avoid division by zero
@@ -224,7 +253,8 @@ def payoff_rule2(
 def payoff_rule3(
     coalition: list[int],
     operators: list[OperatorParams],
-    traffic_at_t: dict[int, float]
+    traffic_at_t: dict[int, float],
+    actual_v_star: Optional[float] = None
 ) -> dict[int, float]:
     """
     Gain-sharing rule 3: Proportional to standalone utility.
@@ -238,6 +268,7 @@ def payoff_rule3(
         coalition: List of operator indices in the coalition
         operators: List of all operator parameters
         traffic_at_t: Dictionary mapping operator index to traffic at current time
+        actual_v_star: Actual coalition value (if None, compute optimal)
 
     Returns:
         Dictionary mapping operator index to their payoff under rule 3.
@@ -257,8 +288,11 @@ def payoff_rule3(
     # Total standalone utility
     V_total = sum(standalone.values())
 
-    # Compute v*(coalition)
-    v_star_coalition, _, _ = coalition_value_star(coalition, operators, traffic_at_t)
+    # Use actual v_star if provided, otherwise compute optimal
+    if actual_v_star is not None:
+        v_star_coalition = actual_v_star
+    else:
+        v_star_coalition, _, _ = coalition_value_star(coalition, operators, traffic_at_t)
 
     if abs(V_total) < 1e-9:
         # Avoid division by zero - equal split

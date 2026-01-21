@@ -1,0 +1,72 @@
+# RAN Sharing Cooperative Game Simulation
+
+## Project Overview
+- **Goal**: Simulate cooperative game theory for RAN sharing among N mobile operators
+- **Language**: Python 3.11+, with type hints and dataclasses
+- **Model**: Based on "uniform-until-saturation" allocation hypothesis
+
+## Project Structure
+```
+src/
+├── generate_data.py   # OperatorParams dataclass, get_example_operators(), get_example_traffic()
+├── utility.py         # single_operator_utility() - individual operator profit
+├── allocate.py        # allocate_uniform_until_saturation() - water-filling traffic allocation
+├── optimiser.py       # coalition_utility(), coalition_value_star() - find optimal guardians
+├── profit.py          # shapley_values(), payoff_rule1/2/3() - gain sharing rules
+└── main.py            # simulate_one_hour(), example usage and entry point
+```
+
+## Implemented Features
+
+### Data Model (generate_data.py)
+- `OperatorParams` dataclass with fields: name, capacity_epsilon, c, beta, K
+- `get_example_operators()` returns 4 operators with different parameters
+- `get_example_traffic(num_steps=60)` returns time-varying traffic profiles
+
+### Core Functions
+1. **single_operator_utility()** (utility.py): v(A_i) = c*T - β*ρ + K
+2. **allocate_uniform_until_saturation()** (allocate.py): Water-filling algorithm to distribute traffic among guardians
+3. **coalition_utility()** (optimiser.py): Compute v(s, l_s) for given coalition and guardian set
+4. **coalition_value_star()** (optimiser.py): Find optimal guardian set l_s* that maximizes v*(s)
+
+### Gain Sharing Rules (profit.py)
+- **shapley_values()**: Compute Shapley values via permutation enumeration
+- **payoff_rule1()**: Equalized costs (D_s) + Shapley-based revenue allocation
+- **payoff_rule2()**: Guard vs non-guard interpolated Shapley (φ_i and ψ_i weighted by ρ_i)
+- **payoff_rule3()**: Proportional to standalone utility v(A_i)
+
+### Simulation (main.py)
+- **simulate_one_hour()**: Run 60-step simulation, compute v*, guardians, and payoffs at each step
+
+## Current Example Configuration
+
+### 4 Operators
+| Operator | ε (capacity) | c (revenue) | β (var cost) | K (fixed) |
+|----------|--------------|-------------|--------------|-----------|
+| Op1      | 100.0        | 1.0         | 0.3          | -10.0     |
+| Op2      | 80.0         | 1.0         | 0.35         | -12.0     |
+| Op3      | 60.0         | 1.1         | 0.25         | -9.0      |
+| Op4      | 70.0         | 0.95        | 0.28         | -11.0     |
+
+### Traffic Profiles (time-varying)
+- **Op1**: Sinusoidal wave (20-70), main traffic driver
+- **Op2**: Early-peaking wave (15-55)
+- **Op3**: Counter-cyclical (10-40), high when others low
+- **Op4**: Steady growth (10-45) throughout the hour
+
+Total traffic ranges from ~138 to ~209, triggering different guardian configurations:
+- Low traffic: [0, 2] (Op1+Op3)
+- Medium traffic: [0, 1] or [0, 3]
+- High traffic: [0, 2, 3] (three guardians needed)
+
+## Running the Simulation
+```bash
+cd src && python main.py
+```
+
+## Future Enhancements
+- [ ] Support real traffic data injection
+- [ ] Add visualization of simulation results
+- [ ] Implement coalition stability analysis
+- [ ] Add more sophisticated traffic patterns
+- [ ] Performance optimization for large N (approximate Shapley)

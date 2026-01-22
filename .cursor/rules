@@ -33,8 +33,11 @@ src/
 ### Gain Sharing Rules (profit.py)
 - **shapley_values()**: Compute Shapley values via permutation enumeration
 - **payoff_rule1()**: Equalized costs (D_s) + Shapley-based revenue allocation
+  - Supports optional `actual_v_star`, `actual_guardians`, `actual_allocation` for online mode
 - **payoff_rule2()**: Guard vs non-guard interpolated Shapley (φ_i and ψ_i weighted by ρ_i)
+  - Supports optional `actual_v_star`, `actual_guardians` for online mode
 - **payoff_rule3()**: Proportional to standalone utility v(A_i)
+  - Supports optional `actual_v_star` for online mode
 
 ### Traffic Prediction (predict.py)
 - **predict_traffic()**: Simple moving average predictor
@@ -50,14 +53,22 @@ src/
 
 #### 2. Online Mode (`simulate_one_hour_online`)
 - **Realistic scenario**: predicts traffic using history (0..t-1)
-- Makes decisions based on predicted traffic
-- Computes actual value using real traffic
-- Returns: predictions, actual traffic, prediction errors, plus standard outputs
+- Decision flow at time t:
+  1. Predict traffic: history[0..t-1] → predict_traffic() → predicted_at_t
+  2. Select guardians: predicted_at_t → coalition_value_star() → guardians_t
+  3. Compute actual results: actual_at_t + guardians_t → actual v*
+- **Capacity failure handling**: If chosen guardians can't handle actual traffic:
+  - Revenue is scaled by (capacity / demand)
+  - Guardians run at full load (ρ = 1.0)
+  - Failure details recorded in `capacity_failures`
+- Payoffs computed using actual v*, guardians, and allocation (not oracle optimal)
+- Returns: predictions, actual traffic, prediction errors, capacity_failures, payoffs
 
 #### 3. Comparison (`compare_oracle_vs_online`)
 - **Guardian Agreement**: % of time steps with same guardian selection
 - **Value Loss**: (oracle - online) / oracle as percentage
 - **Prediction RMSE**: Root mean square error of traffic prediction
+- **Capacity Failure Count**: Number of time steps where prediction underestimated traffic
 
 ## Current Example Configuration
 
@@ -77,8 +88,9 @@ src/
 
 ### Typical Results
 - Guardian Agreement Rate: ~75%
-- Value Loss: ~0.3%
+- Value Loss: ~0.45%
 - Prediction RMSE: ~3.2
+- Capacity Failures: ~9 time steps
 
 ## Running the Simulation
 ```bash

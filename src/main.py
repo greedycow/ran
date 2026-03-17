@@ -115,7 +115,8 @@ def simulate_one_hour_online(
     operators: list[OperatorParams],
     traffic: dict[int, list[float]],
     coalition: Optional[list[int]] = None,
-    window_size: int = 5
+    window_size: int = 5,
+    safety_margin: float = 0.15
 ) -> dict[str, Any]:
     """
     Online mode simulation: predict traffic using historical data (0..t-1).
@@ -124,16 +125,21 @@ def simulate_one_hour_online(
     Instead, we use a moving average of past observations to predict future traffic,
     then make decisions based on the prediction.
 
+    To avoid capacity failures (losing traffic is more severe than suboptimal profit),
+    predicted traffic is inflated by `safety_margin` before guardian selection.
+
     At each time step t:
     1. Use history (0..t-1) to predict traffic at t
-    2. Select guardians based on predicted traffic
-    3. Compute actual coalition value using real traffic
+    2. Inflate prediction by safety_margin for guardian selection
+    3. Select guardians based on inflated traffic
+    4. Compute actual coalition value using real traffic
 
     Args:
         operators: List of all operator parameters
         traffic: Dictionary mapping operator index to traffic time series
         coalition: Coalition to simulate (default: all operators)
         window_size: Number of past observations for moving average prediction
+        safety_margin: Fraction to inflate predicted traffic for guardian selection (default 0.15 = 15%)
 
     Returns:
         Dictionary containing:
@@ -158,6 +164,7 @@ def simulate_one_hour_online(
         'time_steps': num_steps,
         'coalition': coalition,
         'window_size': window_size,
+        'safety_margin': safety_margin,
         'v_star': [],
         'guardians': [],
         'predicted_traffic': [],
@@ -192,9 +199,15 @@ def simulate_one_hour_online(
             error = predicted_at_t[i] - actual_at_t[i]
             result['prediction_errors'][i].append(error)
 
-        # Make decision based on PREDICTED traffic
+        # Inflate predicted traffic by safety margin for guardian selection
+        margined_traffic = {
+            i: predicted_at_t[i] * (1.0 + safety_margin)
+            for i in predicted_at_t
+        }
+
+        # Make decision based on MARGINED predicted traffic
         _, guardians_t, _ = coalition_value_star(
-            coalition, operators, predicted_at_t
+            coalition, operators, margined_traffic
         )
         result['guardians'].append(guardians_t)
 
@@ -377,10 +390,13 @@ if __name__ == "__main__":
     print("=" * 60)
     oracle_result = simulate_one_hour_oracle(ops, traffic_data, coalition)
 
+    safety_margin = 0.15
     print("\n" + "=" * 60)
-    print("Running Online Mode (prediction-based)...")
+    print(f"Running Online Mode (prediction-based, {safety_margin:.0%} safety margin)...")
     print("=" * 60)
-    online_result = simulate_one_hour_online(ops, traffic_data, coalition, window_size=5)
+    online_result = simulate_one_hour_online(
+        ops, traffic_data, coalition, window_size=5, safety_margin=safety_margin
+    )
 
     # Compare results
     print("\n" + "=" * 60)
@@ -388,7 +404,8 @@ if __name__ == "__main__":
     print("=" * 60)
     comparison = compare_oracle_vs_online(oracle_result, online_result)
 
-    print(f"\n  Guardian Agreement Rate: {comparison['guardian_agreement']:.1%}")
+    print(f"\n  Safety Margin:           {safety_margin:.0%}")
+    print(f"  Guardian Agreement Rate: {comparison['guardian_agreement']:.1%}")
     print(f"  Oracle Total Value:      {comparison['oracle_total_value']:.2f}")
     print(f"  Online Total Value:      {comparison['online_total_value']:.2f}")
     print(f"  Value Loss:              {comparison['value_loss_total']:.2f} ({comparison['value_loss_percent']:.2f}%)")
@@ -438,35 +455,56 @@ if __name__ == "__main__":
             print(f"{pred:>10.2f} {actual:>10.2f} {error:>+8.2f} | ", end="")
         print()
 
+    # Compute non-cooperative standalone profits (each operator alone, all 60 steps)
+    standalone_profits: dict[int, float] = {}
+    for i in coalition:
+        total = 0.0
+        for t in range(len(traffic_data[0])):
+            T_i = traffic_data[i][t]
+            rho_i = min(1.0, T_i / ops[i].capacity_epsilon)
+            total += single_operator_utility(ops[i].c, T_i, ops[i].beta, rho_i, ops[i].K)
+        standalone_profits[i] = total
+    standalone_total = sum(standalone_profits.values())
+
     # Show per-operator total profit
     print("\n" + "=" * 60)
     print("Per-Operator Total Profit (summed over 60 time steps)")
     print("=" * 60)
-    
+
+    print("\n--- Non-Cooperative (each operator alone) ---")
+    print(f"{'Operator':<12} | {'Standalone':>12}")
+    print("-" * 28)
+    for i in coalition:
+        print(f"{ops[i].name:<12} | {standalone_profits[i]:>12.2f}")
+    print("-" * 28)
+    print(f"{'Total':<12} | {standalone_total:>12.2f}")
+
     print("\n--- Oracle Mode ---")
-    print(f"{'Operator':<12} | {'Rule 1':>12} | {'Rule 2':>12} | {'Rule 3':>12}")
-    print("-" * 55)
+    print(f"{'Operator':<12} | {'Rule 1':>12} | {'Rule 2':>12} | {'Rule 3':>12} | {'vs Alone':>12}")
+    print("-" * 70)
     for i in coalition:
         r1 = sum(oracle_result['payoffs_rule1'][i])
         r2 = sum(oracle_result['payoffs_rule2'][i])
         r3 = sum(oracle_result['payoffs_rule3'][i])
-        print(f"{ops[i].name:<12} | {r1:>12.2f} | {r2:>12.2f} | {r3:>12.2f}")
-    print("-" * 55)
+        gain = r1 - standalone_profits[i]
+        print(f"{ops[i].name:<12} | {r1:>12.2f} | {r2:>12.2f} | {r3:>12.2f} | {gain:>+12.2f}")
+    print("-" * 70)
     total_r1 = sum(sum(oracle_result['payoffs_rule1'][i]) for i in coalition)
     total_r2 = sum(sum(oracle_result['payoffs_rule2'][i]) for i in coalition)
     total_r3 = sum(sum(oracle_result['payoffs_rule3'][i]) for i in coalition)
-    print(f"{'Total':<12} | {total_r1:>12.2f} | {total_r2:>12.2f} | {total_r3:>12.2f}")
-    
+    print(f"{'Total':<12} | {total_r1:>12.2f} | {total_r2:>12.2f} | {total_r3:>12.2f} | {total_r1 - standalone_total:>+12.2f}")
+
     print("\n--- Online Mode ---")
-    print(f"{'Operator':<12} | {'Rule 1':>12} | {'Rule 2':>12} | {'Rule 3':>12}")
-    print("-" * 55)
+    print(f"{'Operator':<12} | {'Rule 1':>12} | {'Rule 2':>12} | {'Rule 3':>12} | {'vs Alone':>12}")
+    print("-" * 70)
     for i in coalition:
         r1 = sum(online_result['payoffs_rule1'][i])
         r2 = sum(online_result['payoffs_rule2'][i])
         r3 = sum(online_result['payoffs_rule3'][i])
-        print(f"{ops[i].name:<12} | {r1:>12.2f} | {r2:>12.2f} | {r3:>12.2f}")
-    print("-" * 55)
+        gain = r1 - standalone_profits[i]
+        print(f"{ops[i].name:<12} | {r1:>12.2f} | {r2:>12.2f} | {r3:>12.2f} | {gain:>+12.2f}")
+    print("-" * 70)
     total_r1 = sum(sum(online_result['payoffs_rule1'][i]) for i in coalition)
     total_r2 = sum(sum(online_result['payoffs_rule2'][i]) for i in coalition)
     total_r3 = sum(sum(online_result['payoffs_rule3'][i]) for i in coalition)
-    print(f"{'Total':<12} | {total_r1:>12.2f} | {total_r2:>12.2f} | {total_r3:>12.2f}")
+    print(f"{'Total':<12} | {total_r1:>12.2f} | {total_r2:>12.2f} | {total_r3:>12.2f} | {total_r1 - standalone_total:>+12.2f}")

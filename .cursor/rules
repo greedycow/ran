@@ -53,11 +53,13 @@ src/
 
 #### 2. Online Mode (`simulate_one_hour_online`)
 - **Realistic scenario**: predicts traffic using history (0..t-1)
+- **Safety margin** (`safety_margin`, default 0.15 = 15%): predicted traffic is inflated before guardian selection to avoid capacity failures (losing traffic is more severe than suboptimal profit)
 - Decision flow at time t:
   1. Predict traffic: history[0..t-1] → predict_traffic() → predicted_at_t
-  2. Select guardians: predicted_at_t → coalition_value_star() → guardians_t
-  3. Compute actual results: actual_at_t + guardians_t → actual v*
-- **Capacity failure handling**: If chosen guardians can't handle actual traffic:
+  2. Inflate for guardian selection: predicted_at_t * (1 + safety_margin) → margined_traffic
+  3. Select guardians: margined_traffic → coalition_value_star() → guardians_t
+  4. Compute actual results: actual_at_t + guardians_t → actual v*
+- **Capacity failure handling**: If chosen guardians still can't handle actual traffic:
   - Revenue is scaled by (capacity / demand)
   - Guardians run at full load (ρ = 1.0)
   - Failure details recorded in `capacity_failures`
@@ -86,11 +88,12 @@ src/
 - **Op3**: Counter-cyclical (10-40), high when others low
 - **Op4**: Steady growth (10-45) throughout the hour
 
-### Typical Results
-- Guardian Agreement Rate: ~75%
-- Value Loss: ~0.45%
+### Typical Results (with 15% safety margin)
+- Safety Margin: 15%
+- Guardian Agreement Rate: ~3%
+- Value Loss: ~5.7%
 - Prediction RMSE: ~3.2
-- Capacity Failures: ~9 time steps
+- Capacity Failures: 0 time steps
 
 ## Running the Simulation
 ```bash

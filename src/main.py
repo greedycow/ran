@@ -362,7 +362,8 @@ def verify_super_additivity(
     operators: list[OperatorParams],
     traffic: dict[int, list[float]],
     max_coalition_size: Optional[int] = None,
-    debug = False
+    debug = False,
+    feasibility_tolerance: float = 1e-9
 ) -> list[dict]:
     """
     Numerically verify the super-additivity property of v*(S).
@@ -668,4 +669,4 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Verifying Super-Additivity Property...")
     print("=" * 60)
-    verify_super_additivity(ops, traffic_data, max_coalition_size=num_operators, debug=False)
+    verify_super_additivity(ops, traffic_data, max_coalition_size=num_operators, debug=True)

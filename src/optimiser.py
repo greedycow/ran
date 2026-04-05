@@ -58,7 +58,8 @@ def coalition_utility(
 def coalition_value_star(
     coalition: list[int],
     operators: list[OperatorParams],
-    traffic_at_t: dict[int, float]
+    traffic_at_t: dict[int, float],
+    feasibility_tolerance: float = 1e-9
 ) -> tuple[float, list[int], dict[int, float]]:
     """
     Computes the optimal coalition value v*(s) by finding the best guardian set.
@@ -93,7 +94,7 @@ def coalition_value_star(
 
             # Check capacity feasibility
             total_capacity = sum(operators[g].capacity_epsilon for g in guardians)
-            if total_capacity < total_traffic - 1e-9:
+            if total_capacity < total_traffic - feasibility_tolerance:
                 continue  # Infeasible
 
             # Compute allocation and utility

@@ -20,9 +20,10 @@ from itertools import permutations, combinations
 from typing import Any, Callable, Optional
 from math import factorial, sqrt
 
+from allocate import allocate_uniform_until_saturation
 from utility import single_operator_utility
 from generate_data import OperatorParams, get_example_operators, get_example_traffic
-from optimiser import coalition_value_star
+from optimiser import coalition_utility, coalition_value_star
 from profit import shapley_values, payoff_rule1, payoff_rule2, payoff_rule3
 from predict import predict_traffic
 
@@ -357,6 +358,159 @@ def compare_oracle_vs_online(
         'capacity_failures': capacity_failures,
     }
 
+def verify_super_additivity(
+    operators: list[OperatorParams],
+    traffic: dict[int, list[float]],
+    max_coalition_size: Optional[int] = None,
+    debug = False
+) -> None:
+    """
+    Numerically verify the super-additivity property of v*(S).
+
+    Super-additivity: For disjoint coalitions S and T,
+    v*(S union T) ≥ v*(S) + v*(T)
+
+    Tests all pairs of disjoint coalitions.
+
+    Args:
+        operators: List of all operator parameters
+        traffic: Dictionary mapping operator index to traffic time series
+        max_coalition_size: Maximum coalition size to test (default: len(operators))
+    """
+    num_operators = len(operators)
+    if max_coalition_size is None:
+        max_coalition_size = num_operators
+
+    print("\n" + "=" * 80)
+    print("SUPER-ADDITIVITY VERIFICATION")
+    print("=" * 80)
+    print("Testing property: v*(S ∪ T) ≥ v*(S) + v*(T) for disjoint coalitions S, T")
+    print("(Testing at t=0, t=30, t=59)")
+    print()
+
+    test_times = [0, 5]
+    test_times = [t for t in test_times if t < len(next(iter(traffic.values())))]
+
+    violations = []
+    tested_pairs = 0
+
+    # Generate all possible coalitions S (all sizes)
+    from itertools import combinations
+    all_coalitions_S = []
+    for size in range(1, max_coalition_size + 1):
+        for coalition in combinations(range(num_operators), size):
+            all_coalitions_S.append(list(coalition))
+
+    #Test all pairs where S is any coalition and T is a singleton (single operator)
+    for S in all_coalitions_S:
+        for single_operator in range(num_operators):
+            # T is a singleton containing only single_operator
+            T = [single_operator]
+            
+            # Check if S and T are disjoint
+            if single_operator in S:
+                continue  # Skip if operator is already in S
+
+            S_union_T = sorted(list(set(S) | set(T)))
+            tested_pairs += 1
+
+            for t in test_times:
+                traffic_at_t = {j: traffic[j][t] for j in range(num_operators)}
+
+                # Compute values and capture chosen guardians + allocations
+                v_S, guardians_S, alloc_S = coalition_value_star(S, operators, traffic_at_t)
+                v_T, guardians_T, alloc_T = coalition_value_star(T, operators, traffic_at_t)
+                v_ST, guardians_ST, alloc_ST = coalition_value_star(S_union_T, operators, traffic_at_t)
+
+                # Check super-additivity
+                if v_ST < v_S + v_T - 1e-6: 
+                    # Compute union of separate guardians and its value/allocation
+                    union_guardians = sorted(list(set(guardians_S) | set(guardians_T)))
+                    # total traffic for the union coalition
+                    total_traffic_union = sum(traffic_at_t[j] for j in S_union_T)
+                    try:
+                        alloc_union = allocate_uniform_until_saturation(
+                            union_guardians,
+                            {g: operators[g].capacity_epsilon for g in union_guardians},
+                            total_traffic_union
+                        ) if union_guardians else {}
+                    except Exception:
+                        alloc_union = {}
+
+                    try:
+                        union_value = coalition_utility(S_union_T, union_guardians, operators, traffic_at_t)
+                    except Exception:
+                        union_value = None
+
+                    violation = {
+                        'time': t,
+                        'S': S,
+                        'T': T,
+                        'S∪T': S_union_T,
+                        'v(S)': v_S,
+                        'v(T)': v_T,
+                        'v(S∪T)': v_ST,
+                        'v(S) + v(T)': v_S + v_T,
+                        'deficit': v_S + v_T - v_ST,
+                        'guardians_S': guardians_S,
+                        'alloc_S': alloc_S,
+                        'guardians_T': guardians_T,
+                        'alloc_T': alloc_T,
+                        'guardians_S∪T': guardians_ST,
+                        'alloc_S∪T': alloc_ST,
+                        'union_guardians': union_guardians,
+                        'alloc_union_guardians': alloc_union,
+                        'union_value': union_value,
+                    }
+                    violations.append(violation)
+
+    # Report results
+    total_tests = tested_pairs * len(test_times)
+    print(f"Total pairs tested: {tested_pairs} disjoint coalition pairs")
+    print(f"Total super-additivity tests: {total_tests}")
+    print()
+
+    if not violations:
+        print("SUCCESS: Super-additivity holds for all tested pairs!")
+        print()
+    else:
+        print(f"VIOLATIONS FOUND: {len(violations)} super-additivity violations")
+        print()
+        print(f"{'t':>3} | {'S':>10} | {'T':>10} | {'v(S)':>10} | {'v(T)':>10} | {'v(S∪T)':>12} | {'Sum':>12} | {'Deficit':>10}")
+        print("-" * 95)
+        for v in violations[:20]:  # Print first 20 violations
+            sum_val = v['v(S)'] + v['v(T)']
+            print(f"{v['time']:>3} | {str(v['S']):>10} | {str(v['T']):>10} | {v['v(S)']:>10.2f} | "
+                  f"{v['v(T)']:>10.2f} | {v['v(S∪T)']:>12.2f} | {sum_val:>12.2f} | {v['deficit']:>10.2f}")
+        if len(violations) > 20:
+            print(f"... and {len(violations)-20} more violations")
+        print()
+
+        # Debug prints for first few violations: show guardians, allocations and union-guardians check
+        if debug == True:
+            print("Detailed debug for first violations:")
+            for v in violations[:5]:
+                print("-" * 60)
+                print(f"t={v['time']}, S={v['S']}, T={v['T']}, S∪T={v['S∪T']}")
+                print(f"v(S)={v['v(S)']:.6f}, v(T)={v['v(T)']:.6f}, v(S∪T)={v['v(S∪T)']:.6f}, sum={v['v(S)']+v['v(T)']:.6f}, deficit={v['deficit']:.6f}")
+                print(f" guardians_S: {v.get('guardians_S')}\n alloc_S: {v.get('alloc_S')}")
+                print(f" guardians_T: {v.get('guardians_T')}\n alloc_T: {v.get('alloc_T')}")
+                print(f" guardians_S∪T (chosen): {v.get('guardians_S∪T')}\n alloc_S∪T: {v.get('alloc_S∪T')}")
+                print(f" union_guardians (S U T guardians): {v.get('union_guardians')}")
+                print(f" alloc_union_guardians: {v.get('alloc_union_guardians')}")
+                print(f" union_value (coalition_utility with union_guardians): {v.get('union_value')}")
+            print()
+
+    # Summary statistics
+    if violations:
+        deficits = [v['deficit'] for v in violations]
+        print(f"Violation statistics:")
+        print(f"  Min deficit:     {min(deficits):>10.4f}")
+        print(f"  Max deficit:     {max(deficits):>10.4f}")
+        print(f"  Mean deficit:    {sum(deficits)/len(deficits):>10.4f}")
+        print()
+
+
 
 # Example usage
 if __name__ == "__main__":
@@ -508,3 +662,9 @@ if __name__ == "__main__":
     total_r2 = sum(sum(online_result['payoffs_rule2'][i]) for i in coalition)
     total_r3 = sum(sum(online_result['payoffs_rule3'][i]) for i in coalition)
     print(f"{'Total':<12} | {total_r1:>12.2f} | {total_r2:>12.2f} | {total_r3:>12.2f} | {total_r1 - standalone_total:>+12.2f}")
+
+    # Verify super-additivity of v*
+    print("\n" + "=" * 60)
+    print("Verifying Super-Additivity Property...")
+    print("=" * 60)
+    verify_super_additivity(ops, traffic_data, max_coalition_size=num_operators, debug=False)

@@ -31,6 +31,7 @@ from main import (
     simulate_one_hour_oracle,
     simulate_one_hour_online,
     compare_oracle_vs_online,
+    verify_super_additivity,
 )
 
 # ── Global style ─────────────────────────────────────────────────────────────
@@ -376,7 +377,54 @@ def fig_safety_margin_sweep(ops, traffic, coalition, out_dir):
     plt.close(fig)
 
 
-# ── Figure 8: Summary Dashboard ─────────────────────────────────────────────
+# ── Figure 9: Super-Additivity Deficit ───────────────────────────────────────
+
+def fig_super_additivity_deficit(ops, traffic, coalition, out_dir):
+    """Scatter plot of super-additivity deficits over time, colored by coalition size."""
+    violations = verify_super_additivity(ops, traffic, max_coalition_size=len(coalition), debug=False)
+    
+    if not violations:
+        print("No super-additivity violations found - skipping deficit plot")
+        return
+    
+    # Extract data
+    times = [v['time'] for v in violations]
+    deficits = [v['deficit'] for v in violations]
+    coalition_sizes = [len(v['S']) + len(v['T']) for v in violations]  # Total operators in S∪T
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Create scatter plot with color mapping
+    scatter = ax.scatter(times, deficits, c=coalition_sizes, cmap='viridis', 
+                        alpha=0.7, s=50, edgecolors='white', linewidth=0.5)
+    
+    # Add colorbar
+    cbar = plt.colorbar(scatter, ax=ax)
+    cbar.set_label('Total Coalition Size (|S ∪ T|)', fontsize=10)
+    
+    ax.set_xlabel("Time (min)")
+    ax.set_ylabel("Super-Additivity Deficit")
+    ax.set_title("Super-Additivity Deficits Over Time\nColored by Coalition Size")
+    
+    # Add statistics
+    mean_deficit = np.mean(deficits)
+    max_deficit = np.max(deficits)
+    total_violations = len(violations)
+    
+    stats_text = f"Total violations: {total_violations}\nMean deficit: {mean_deficit:.3f}\nMax deficit: {max_deficit:.3f}"
+    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    # Add horizontal line at zero (no deficit)
+    ax.axhline(0, color="#94a3b8", linestyle="-", linewidth=0.8, alpha=0.5)
+    
+    
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, "fig9_super_additivity_deficit.png"))
+    plt.close(fig)
+
+
+# ── Figure 9: Summary Dashboard ─────────────────────────────────────────────
 
 def fig_summary_dashboard(ops, traffic, coalition, oracle, online,
                           comparison, standalone_ts, out_dir):
@@ -646,7 +694,10 @@ def main():
     print("Generating Figure 7: Safety Margin Sensitivity...")
     fig_safety_margin_sweep(ops, traffic, coalition, out_dir)
 
-    print("Generating Figure 8: Summary Dashboard...")
+    print("Generating Figure 8: Super-Additivity Deficit...")
+    fig_super_additivity_deficit(ops, traffic, coalition, out_dir)
+
+    print("Generating Figure 9: Summary Dashboard...")
     fig_summary_dashboard(ops, traffic, coalition, oracle, online,
                           comparison, standalone_ts, out_dir)
 

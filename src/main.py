@@ -363,7 +363,7 @@ def verify_super_additivity(
     traffic: dict[int, list[float]],
     max_coalition_size: Optional[int] = None,
     debug = False
-) -> None:
+) -> list[dict]:
     """
     Numerically verify the super-additivity property of v*(S).
 
@@ -388,7 +388,7 @@ def verify_super_additivity(
     print("(Testing at t=0, t=30, t=59)")
     print()
 
-    test_times = [0, 5]
+    test_times = [0, 5, 10, 15, 25, 35, 50, 59]
     test_times = [t for t in test_times if t < len(next(iter(traffic.values())))]
 
     violations = []
@@ -510,6 +510,7 @@ def verify_super_additivity(
         print(f"  Mean deficit:    {sum(deficits)/len(deficits):>10.4f}")
         print()
 
+    return violations
 
 
 # Example usage

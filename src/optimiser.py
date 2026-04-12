@@ -1,5 +1,5 @@
 from generate_data import OperatorParams
-from allocate import allocate_uniform_until_saturation
+from allocate import allocate_uniform_until_saturation, allocate_minimize_cost
 from itertools import combinations
 
 
@@ -40,7 +40,8 @@ def coalition_utility(
     capacities = {i: operators[i].capacity_epsilon for i in guardians}
 
     # Allocate traffic using uniform-until-saturation
-    allocation = allocate_uniform_until_saturation(guardians, capacities, total_traffic)
+    betas = {i: operators[i].beta for i in guardians}
+    allocation = allocate_minimize_cost(guardians, capacities, betas, total_traffic)
 
     # Compute costs for guardians
     total_variable_cost = 0.0
@@ -100,9 +101,8 @@ def coalition_value_star(
             # Compute allocation and utility
             capacities = {g: operators[g].capacity_epsilon for g in guardians}
             try:
-                allocation = allocate_uniform_until_saturation(
-                    guardians, capacities, total_traffic
-                )
+                betas = {i: operators[i].beta for i in guardians}
+                allocation = allocate_minimize_cost(guardians, capacities, betas, total_traffic)
             except ValueError:
                 continue
 

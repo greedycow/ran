@@ -424,7 +424,7 @@ def fig_super_additivity_deficit(ops, traffic, coalition, out_dir):
     plt.close(fig)
 
 
-# ── Figure 9: Summary Dashboard ─────────────────────────────────────────────
+# ── Figure 10: Summary Dashboard ─────────────────────────────────────────────
 
 def fig_summary_dashboard(ops, traffic, coalition, oracle, online,
                           comparison, standalone_ts, out_dir):

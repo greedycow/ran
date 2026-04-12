@@ -20,7 +20,7 @@ from itertools import permutations, combinations
 from typing import Any, Callable, Optional
 from math import factorial, sqrt
 
-from allocate import allocate_uniform_until_saturation
+from allocate import allocate_uniform_until_saturation, allocate_proportional
 from utility import single_operator_utility
 from generate_data import OperatorParams, get_example_operators, get_example_traffic
 from optimiser import coalition_utility, coalition_value_star
@@ -117,7 +117,8 @@ def simulate_one_hour_online(
     traffic: dict[int, list[float]],
     coalition: Optional[list[int]] = None,
     window_size: int = 5,
-    safety_margin: float = 0.15
+    safety_margin: float = 0.15,
+    allocation_func: Callable = allocate_uniform_until_saturation
 ) -> dict[str, Any]:
     """
     Online mode simulation: predict traffic using historical data (0..t-1).
@@ -141,6 +142,7 @@ def simulate_one_hour_online(
         coalition: Coalition to simulate (default: all operators)
         window_size: Number of past observations for moving average prediction
         safety_margin: Fraction to inflate predicted traffic for guardian selection (default 0.15 = 15%)
+        allocation_func: Function to allocate traffic among guardians (default: allocate_uniform_until_saturation)
 
     Returns:
         Dictionary containing:
@@ -215,7 +217,6 @@ def simulate_one_hour_online(
         # But compute actual value using REAL traffic with chosen guardians
         # This represents what actually happens when we apply the decision
         from optimiser import coalition_utility
-        from allocate import allocate_uniform_until_saturation
 
         # Check if guardians can handle actual traffic
         total_actual_traffic = sum(actual_at_t[i] for i in coalition)
@@ -226,7 +227,7 @@ def simulate_one_hour_online(
             actual_v_star = coalition_utility(coalition, guardians_t, operators, actual_at_t)
             # Compute actual allocation for payoff calculation
             capacities = {g: operators[g].capacity_epsilon for g in guardians_t}
-            actual_allocation = allocate_uniform_until_saturation(
+            actual_allocation = allocation_func(
                 guardians_t, capacities, total_actual_traffic
             )
         else:
@@ -389,7 +390,7 @@ def verify_super_additivity(
     print("(Testing at t=0, t=30, t=59)")
     print()
 
-    test_times = [0, 5, 10, 15, 25, 35, 50, 59]
+    test_times = [i for i in range(len(next(iter(traffic.values()))))]
     test_times = [t for t in test_times if t < len(next(iter(traffic.values())))]
 
     violations = []
@@ -548,32 +549,54 @@ if __name__ == "__main__":
 
     safety_margin = 0.15
     print("\n" + "=" * 60)
-    print(f"Running Online Mode (prediction-based, {safety_margin:.0%} safety margin)...")
+    print(f"Running Online Mode (uniform allocation, {safety_margin:.0%} safety margin)...")
     print("=" * 60)
-    online_result = simulate_one_hour_online(
-        ops, traffic_data, coalition, window_size=5, safety_margin=safety_margin
+    online_uniform_result = simulate_one_hour_online(
+        ops, traffic_data, coalition, window_size=5, safety_margin=safety_margin,
+        allocation_func=allocate_uniform_until_saturation
+    )
+
+    print("\n" + "=" * 60)
+    print(f"Running Online Mode (proportional allocation, {safety_margin:.0%} safety margin)...")
+    print("=" * 60)
+    online_proportional_result = simulate_one_hour_online(
+        ops, traffic_data, coalition, window_size=5, safety_margin=safety_margin,
+        allocation_func=allocate_proportional
     )
 
     # Compare results
     print("\n" + "=" * 60)
-    print("Comparison: Oracle vs Online")
+    print("Comparison: Oracle vs Online (Uniform Allocation)")
     print("=" * 60)
-    comparison = compare_oracle_vs_online(oracle_result, online_result)
+    comparison_uniform = compare_oracle_vs_online(oracle_result, online_uniform_result)
 
     print(f"\n  Safety Margin:           {safety_margin:.0%}")
-    print(f"  Guardian Agreement Rate: {comparison['guardian_agreement']:.1%}")
-    print(f"  Oracle Total Value:      {comparison['oracle_total_value']:.2f}")
-    print(f"  Online Total Value:      {comparison['online_total_value']:.2f}")
-    print(f"  Value Loss:              {comparison['value_loss_total']:.2f} ({comparison['value_loss_percent']:.2f}%)")
-    print(f"  Prediction RMSE:         {comparison['prediction_rmse']:.4f}")
-    print(f"  Capacity Failures:       {comparison['capacity_failure_count']} time steps")
+    print(f"  Guardian Agreement Rate: {comparison_uniform['guardian_agreement']:.1%}")
+    print(f"  Oracle Total Value:      {comparison_uniform['oracle_total_value']:.2f}")
+    print(f"  Online Total Value:      {comparison_uniform['online_total_value']:.2f}")
+    print(f"  Value Loss:              {comparison_uniform['value_loss_total']:.2f} ({comparison_uniform['value_loss_percent']:.2f}%)")
+    print(f"  Prediction RMSE:         {comparison_uniform['prediction_rmse']:.4f}")
+    print(f"  Capacity Failures:       {comparison_uniform['capacity_failure_count']} time steps")
+
+    print("\n" + "=" * 60)
+    print("Comparison: Oracle vs Online (Proportional Allocation)")
+    print("=" * 60)
+    comparison_proportional = compare_oracle_vs_online(oracle_result, online_proportional_result)
+
+    print(f"\n  Safety Margin:           {safety_margin:.0%}")
+    print(f"  Guardian Agreement Rate: {comparison_proportional['guardian_agreement']:.1%}")
+    print(f"  Oracle Total Value:      {comparison_proportional['oracle_total_value']:.2f}")
+    print(f"  Online Total Value:      {comparison_proportional['online_total_value']:.2f}")
+    print(f"  Value Loss:              {comparison_proportional['value_loss_total']:.2f} ({comparison_proportional['value_loss_percent']:.2f}%)")
+    print(f"  Prediction RMSE:         {comparison_proportional['prediction_rmse']:.4f}")
+    print(f"  Capacity Failures:       {comparison_proportional['capacity_failure_count']} time steps")
     
     # Show capacity failure details if any
-    if comparison['capacity_failures']:
+    if comparison_uniform['capacity_failures']:
         print("\n" + "-" * 60)
         print("Capacity Failures (prediction underestimated traffic)")
         print("-" * 60)
-        for failure in comparison['capacity_failures']:
+        for failure in comparison_uniform['capacity_failures']:
             print(f"  t={failure['t']:2d}: needed {failure['needed']:.2f}, "
                   f"available {failure['available']:.2f}, "
                   f"shortfall {failure['shortfall']:.2f}")
@@ -582,16 +605,17 @@ if __name__ == "__main__":
     print("\n" + "-" * 60)
     print("Detailed Comparison (selected time steps)")
     print("-" * 60)
-    print(f"{'t':>3} | {'Oracle Guardians':<18} | {'Online Guardians':<18} | {'Match':<5} | {'Oracle v*':>10} | {'Online v*':>10}")
-    print("-" * 80)
+    print(f"{'t':>3} | {'Oracle Guardians':<18} | {'Uniform Guardians':<18} | {'Prop Guardians':<18} | {'Oracle v*':>10} | {'Uniform v*':>10} | {'Prop v*':>10}")
+    print("-" * 120)
 
     for t in [0, 10, 20, 30, 40, 50, 59]:
         oracle_g = oracle_result['guardians'][t]
-        online_g = online_result['guardians'][t]
-        match = "✓" if set(oracle_g) == set(online_g) else "✗"
+        uniform_g = online_uniform_result['guardians'][t]
+        prop_g = online_proportional_result['guardians'][t]
         oracle_v = oracle_result['v_star'][t]
-        online_v = online_result['v_star'][t]
-        print(f"{t:>3} | {str(oracle_g):<18} | {str(online_g):<18} | {match:^5} | {oracle_v:>10.2f} | {online_v:>10.2f}")
+        uniform_v = online_uniform_result['v_star'][t]
+        prop_v = online_proportional_result['v_star'][t]
+        print(f"{t:>3} | {str(oracle_g):<18} | {str(uniform_g):<18} | {str(prop_g):<18} | {oracle_v:>10.2f} | {uniform_v:>10.2f} | {prop_v:>10.2f}")
 
     # Show prediction errors
     print("\n" + "-" * 60)
@@ -605,9 +629,9 @@ if __name__ == "__main__":
     for t in [5, 15, 30, 45]:
         print(f"{t:>3} | ", end="")
         for i in range(num_operators):
-            pred = online_result['predicted_traffic'][t][i]
-            actual = online_result['actual_traffic'][t][i]
-            error = online_result['prediction_errors'][i][t]
+            pred = online_uniform_result['predicted_traffic'][t][i]
+            actual = online_uniform_result['actual_traffic'][t][i]
+            error = online_uniform_result['prediction_errors'][i][t]
             print(f"{pred:>10.2f} {actual:>10.2f} {error:>+8.2f} | ", end="")
         print()
 
@@ -650,19 +674,34 @@ if __name__ == "__main__":
     total_r3 = sum(sum(oracle_result['payoffs_rule3'][i]) for i in coalition)
     print(f"{'Total':<12} | {total_r1:>12.2f} | {total_r2:>12.2f} | {total_r3:>12.2f} | {total_r1 - standalone_total:>+12.2f}")
 
-    print("\n--- Online Mode ---")
+    print("\n--- Online Mode (Uniform Allocation) ---")
     print(f"{'Operator':<12} | {'Rule 1':>12} | {'Rule 2':>12} | {'Rule 3':>12} | {'vs Alone':>12}")
     print("-" * 70)
     for i in coalition:
-        r1 = sum(online_result['payoffs_rule1'][i])
-        r2 = sum(online_result['payoffs_rule2'][i])
-        r3 = sum(online_result['payoffs_rule3'][i])
+        r1 = sum(online_uniform_result['payoffs_rule1'][i])
+        r2 = sum(online_uniform_result['payoffs_rule2'][i])
+        r3 = sum(online_uniform_result['payoffs_rule3'][i])
         gain = r1 - standalone_profits[i]
         print(f"{ops[i].name:<12} | {r1:>12.2f} | {r2:>12.2f} | {r3:>12.2f} | {gain:>+12.2f}")
     print("-" * 70)
-    total_r1 = sum(sum(online_result['payoffs_rule1'][i]) for i in coalition)
-    total_r2 = sum(sum(online_result['payoffs_rule2'][i]) for i in coalition)
-    total_r3 = sum(sum(online_result['payoffs_rule3'][i]) for i in coalition)
+    total_r1 = sum(sum(online_uniform_result['payoffs_rule1'][i]) for i in coalition)
+    total_r2 = sum(sum(online_uniform_result['payoffs_rule2'][i]) for i in coalition)
+    total_r3 = sum(sum(online_uniform_result['payoffs_rule3'][i]) for i in coalition)
+    print(f"{'Total':<12} | {total_r1:>12.2f} | {total_r2:>12.2f} | {total_r3:>12.2f} | {total_r1 - standalone_total:>+12.2f}")
+
+    print("\n--- Online Mode (Proportional Allocation) ---")
+    print(f"{'Operator':<12} | {'Rule 1':>12} | {'Rule 2':>12} | {'Rule 3':>12} | {'vs Alone':>12}")
+    print("-" * 70)
+    for i in coalition:
+        r1 = sum(online_proportional_result['payoffs_rule1'][i])
+        r2 = sum(online_proportional_result['payoffs_rule2'][i])
+        r3 = sum(online_proportional_result['payoffs_rule3'][i])
+        gain = r1 - standalone_profits[i]
+        print(f"{ops[i].name:<12} | {r1:>12.2f} | {r2:>12.2f} | {r3:>12.2f} | {gain:>+12.2f}")
+    print("-" * 70)
+    total_r1 = sum(sum(online_proportional_result['payoffs_rule1'][i]) for i in coalition)
+    total_r2 = sum(sum(online_proportional_result['payoffs_rule2'][i]) for i in coalition)
+    total_r3 = sum(sum(online_proportional_result['payoffs_rule3'][i]) for i in coalition)
     print(f"{'Total':<12} | {total_r1:>12.2f} | {total_r2:>12.2f} | {total_r3:>12.2f} | {total_r1 - standalone_total:>+12.2f}")
 
     # Verify super-additivity of v*
